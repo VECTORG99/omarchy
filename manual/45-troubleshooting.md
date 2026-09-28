@@ -28,7 +28,7 @@ Before you reboot, try restarting the offending subsystem on its own. _Update > 
 
 ### My mouse or other USB peripherals are frozen after waking from sleep
 
-On some AMD systems, USB controllers fail to come back cleanly after waking from sleep (deep sleep on some AMD systems): the mouse, keyboard, or a USB receiver still shows up as connected, but stops responding until you unplug and replug it (or reboot). The kernel log shows the controller failing to resume:
+On some AMD systems, USB controllers fail to come back cleanly after waking from sleep (deep sleep on some AMD systems): the mouse, keyboard, or a USB receiver still shows up as connected, but stops responding until the controller is reset — replugging it into the same port doesn't help, but reloading the driver (below) or a reboot does. The kernel log shows the controller failing to resume:
 
 ```text
 xHC error in resume, USBSTS 0x401, Reinit
@@ -38,10 +38,17 @@ HC died; cleaning up
 
 This is a known upstream AMD xHCI resume bug ([Bugzilla 221073](https://bugzilla.kernel.org/show_bug.cgi?id=221073)), not something caused by Omarchy. Two workarounds are known:
 
-1. **Force legacy interrupts on the xHCI driver (the reliable workaround).** Adding `xhci_hcd.quirks=0x40` (the XHCI_BROKEN_MSI quirk) to the kernel command line makes the controller use a regular interrupt instead of MSI, which sidesteps the resume failure on the machines reported in the bug. Verified on the user's hardware: after enabling it, the controllers moved from MSI-X to IO-APIC INTx and the errors stopped (boot 2026-08-20).
-2. **Use a lighter sleep state (helps in some cases, not a complete fix).** With s2idle, the USB controllers stay powered. Add `mem_sleep_default=s2idle` to your kernel command line in the boot loader (Limine by default), or for the current session only, run `echo s2idle > /sys/power/mem_sleep` (as root). It uses a bit more battery while suspended and has its own wake-up quirks — see [the manual on system sleep](36-system-sleep.md) — and on the user's hardware the failure still reappeared after long sleeps, so this is a partial mitigation, not the reliable fix (221073 itself is a resume-from-s2idle failure class).
+1. **Force legacy interrupts on the xHCI driver (the reported fix).** Adding `xhci_hcd.quirks=0x40` (the XHCI_BROKEN_MSI quirk) to the kernel command line makes the controller use a regular interrupt instead of MSI, which has sidestepped the resume failure for those who reported it.
+2. **Try a different sleep state (helps in some cases, not a complete fix).** If `cat /sys/power/mem_sleep` shows `[deep]` selected, switching to s2idle may avoid the failure: add `mem_sleep_default=s2idle` to the kernel command line, or for the current session only, run `echo s2idle > /sys/power/mem_sleep` (as root). It uses more battery while suspended, and the bug itself has been reported resuming from s2idle too, so it may only make the failure rarer. If `[s2idle]` is already selected, this changes nothing.
 
-If a peripheral is already frozen right now, you can usually bring it back without a reboot by reloading the xHCI driver for your controller. Find its address with `lspci -nn | grep -i xhci`, then (as root):
+To add a kernel parameter with the default Limine boot loader, put it in a drop-in file, regenerate the boot entries, and reboot:
+
+```bash
+echo 'KERNEL_CMDLINE[default]+=" xhci_hcd.quirks=0x40"' | sudo tee /etc/limine-entry-tool.d/usb-xhci-quirks.conf
+sudo limine-mkinitcpio
+```
+
+If a peripheral is already frozen right now, you can usually bring it back without a reboot by reloading the xHCI driver for your controller. Find its address with `lspci -Dk -d ::0c03` (the USB controllers whose driver in use is `xhci_hcd`), then (as root):
 
 ```bash
 echo -n 0000:30:00.3 > /sys/bus/pci/drivers/xhci_hcd/unbind
